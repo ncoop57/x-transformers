@@ -76,7 +76,10 @@ class AutoregressiveWrapper(nn.Module):
             x = out[:, -self.max_seq_len:]
             mask = mask[:, -self.max_seq_len:]
 
-            logits = self.net(x, mask=mask, **kwargs)[:, -1, :]
+            logits = self.net(x, mask=mask, **kwargs)
+            if isinstance(logits, tuple):
+                logits, _ = logits
+            logits = logits[:, -1, :]
 
             if filter_logits_fn in {top_k, top_p}:
                 filtered_logits = filter_logits_fn(logits, thres = filter_thres)
@@ -115,6 +118,7 @@ class AutoregressiveWrapper(nn.Module):
     def forward(self, x, **kwargs):
         xi = x[:, :-1]
         xo = x[:, 1:]
+        xs = kwargs.pop('sec_tgt', None)
 
         # help auto-solve a frequent area of confusion around input masks in auto-regressive
         # if user supplies a mask that is only off by one from the source sequence, resolve it for them
@@ -124,5 +128,15 @@ class AutoregressiveWrapper(nn.Module):
             kwargs['mask'] = mask
 
         out = self.net(xi, **kwargs)
-        loss = F.cross_entropy(out.transpose(1, 2), xo, ignore_index = self.ignore_index)
+        if xs is not None:
+            xs = xs[:, 1:] if xs is not None else None
+
+            out, secondary_out = out
+            loss = F.cross_entropy(out.transpose(1, 2), xo, ignore_index = self.ignore_index)
+            sec_loss = F.cross_entropy(secondary_out.transpose(1, 2), xs, ignore_index = self.ignore_index)
+            
+            loss = (loss + sec_loss) / 2
+        else:
+            loss = F.cross_entropy(out.transpose(1, 2), xo, ignore_index = self.ignore_index)
+
         return loss

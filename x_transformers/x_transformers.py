@@ -917,6 +917,7 @@ class TransformerWrapper(nn.Module):
         self,
         *,
         num_tokens,
+        num_secondary_tokens = None,
         max_seq_len,
         attn_layers,
         emb_dim = None,
@@ -948,6 +949,7 @@ class TransformerWrapper(nn.Module):
         self.init_()
 
         self.to_logits = nn.Linear(dim, num_tokens) if not tie_embedding else lambda t: t @ self.token_emb.weight.t()
+        self.to_secondary_logits = nn.Linear(dim, num_secondary_tokens) if num_secondary_tokens is not None else None
 
         # memory tokens (like [cls]) from Memory Transformers paper
         num_memory_tokens = default(num_memory_tokens, 0)
@@ -993,6 +995,7 @@ class TransformerWrapper(nn.Module):
         mem, x = x[:, :num_mem], x[:, num_mem:]
 
         out = self.to_logits(x) if not return_embeddings else x
+        secondary_out = self.to_secondary_logits(x) if exists(self.to_secondary_logits) else None
 
         if return_mems:
             hiddens = intermediates.hiddens
@@ -1003,6 +1006,9 @@ class TransformerWrapper(nn.Module):
         if return_attn:
             attn_maps = list(map(lambda t: t.post_softmax_attn, intermediates.attn_intermediates))
             return out, attn_maps
+
+        if secondary_out is not None:
+            return out, secondary_out
 
         return out
 
@@ -1080,6 +1086,7 @@ class XTransformer(nn.Module):
 
         dec_transformer_kwargs = pick_and_pop(['num_tokens', 'max_seq_len'], dec_kwargs)
         dec_transformer_kwargs['emb_dropout'] = dec_kwargs.pop('emb_dropout', 0)
+        enc_transformer_kwargs['num_secondary_tokens'] = enc_kwargs.pop('num_secondary_tokens', None)
 
         self.encoder = TransformerWrapper(
             **enc_transformer_kwargs,
@@ -1101,7 +1108,7 @@ class XTransformer(nn.Module):
         encodings = self.encoder(seq_in, mask = src_mask, attn_mask = src_attn_mask, return_embeddings = True)
         return self.decoder.generate(seq_out_start, seq_len, context = encodings, context_mask = src_mask, **kwargs)
 
-    def forward(self, src, tgt, src_mask = None, tgt_mask = None, src_attn_mask = None):
+    def forward(self, src, tgt, sec_tgt = None, src_mask = None, tgt_mask = None, src_attn_mask = None):
         enc = self.encoder(src, mask = src_mask, attn_mask = src_attn_mask, return_embeddings = True)
-        out = self.decoder(tgt, context = enc, mask = tgt_mask, context_mask = src_mask)
+        out = self.decoder(tgt, sec_tgt = sec_tgt, context = enc, mask = tgt_mask, context_mask = src_mask)
         return out
