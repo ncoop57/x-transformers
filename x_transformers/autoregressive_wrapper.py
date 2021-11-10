@@ -78,7 +78,7 @@ class AutoregressiveWrapper(nn.Module):
 
             logits = self.net(x, mask=mask, **kwargs)
             if isinstance(logits, tuple):
-                logits, _ = logits
+                logits, *_ = logits
             logits = logits[:, -1, :]
 
             if filter_logits_fn in {top_k, top_p}:
@@ -118,7 +118,8 @@ class AutoregressiveWrapper(nn.Module):
     def forward(self, x, **kwargs):
         xi = x[:, :-1]
         xo = x[:, 1:]
-        xs = kwargs.pop('sec_tgt', None)
+        xo2 = kwargs.pop('sec_tgt', None)
+        xo3 = kwargs.pop('ter_tgt', None)
 
         # help auto-solve a frequent area of confusion around input masks in auto-regressive
         # if user supplies a mask that is only off by one from the source sequence, resolve it for them
@@ -128,14 +129,23 @@ class AutoregressiveWrapper(nn.Module):
             kwargs['mask'] = mask
 
         out = self.net(xi, **kwargs)
-        if xs is not None:
-            xs = xs[:, 1:] if xs is not None else None
+        if isinstance(out, tuple):
+            if len(out) == 2:
+                xo2 = xo2[:, 1:]
+                out, secondary_out = out
+                loss = F.cross_entropy(out.transpose(1, 2), xo, ignore_index = self.ignore_index)
+                sec_loss = F.cross_entropy(secondary_out.transpose(1, 2), xo2, ignore_index = self.ignore_index)
+                
+                loss = (loss + sec_loss) / 2
+            elif len(out) == 3:
+                xo2 = xo2[:, 1:]
+                xo3 = xo3[:, 1:]
+                out, secondary_out, tertiary_out = out
+                loss = F.cross_entropy(out.transpose(1, 2), xo, ignore_index = self.ignore_index)
+                sec_loss = F.cross_entropy(secondary_out.transpose(1, 2), xo2, ignore_index = self.ignore_index)
+                ter_loss = F.cross_entropy(tertiary_out.transpose(1, 2), xo3, ignore_index = self.ignore_index)
 
-            out, secondary_out = out
-            loss = F.cross_entropy(out.transpose(1, 2), xo, ignore_index = self.ignore_index)
-            sec_loss = F.cross_entropy(secondary_out.transpose(1, 2), xs, ignore_index = self.ignore_index)
-            
-            loss = (loss + sec_loss) / 2
+                loss = (loss + sec_loss + ter_loss) / 3
         else:
             loss = F.cross_entropy(out.transpose(1, 2), xo, ignore_index = self.ignore_index)
 
